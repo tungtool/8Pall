@@ -1,0 +1,9 @@
+Package: com.yourname.aimassist
+Name: AimAssist
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: ESP lines from cue ball to all balls, with smooth overlay and configurable menu.
+Maintainer: You <you@example.com>
+Author: You <you@example.com>
+Section: Tweaks
+Depends: mobilesubstrate (>= 0.9.5000)
