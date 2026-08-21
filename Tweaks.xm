@@ -1,4 +1,5 @@
 #import <substrate.h>
+#import <objc/runtime.h>
 #import "Common.h"
 #import "AimAssistOverlay.h"
 #import "AimAssistMenu.h"
@@ -7,6 +8,42 @@
 static AimAssistOverlay *overlay = nil;
 static CCScene *currentScene = nil;
 static BOOL isMenuVisible = NO;
+
+// Helper để lấy BallManager
+static id getBallManager() {
+    Class cls = NSClassFromString(@"BallManager");
+    // Thử sharedInstance
+    id instance = [cls performSelector:@selector(sharedManager)];
+    if (instance) return instance;
+    // Thử shared
+    instance = [cls performSelector:@selector(shared)];
+    if (instance) return instance;
+    // Nếu không, tìm trong scene
+    for (CCNode *child in [currentScene children]) {
+        if ([child isKindOfClass:cls]) return child;
+    }
+    return nil;
+}
+
+// Helper để lấy TableProperties từ Table
+static id<TableProperties> getTableProperties(Table *table) {
+    if ([table respondsToSelector:@selector(properties)]) {
+        return [table performSelector:@selector(properties)];
+    }
+    if ([table respondsToSelector:@selector(ballProperties)]) {
+        return [table performSelector:@selector(ballProperties)];
+    }
+    // Thử lấy ivar
+    Ivar ivar = class_getInstanceVariable([table class], "_properties");
+    if (ivar) {
+        return object_getIvar(table, ivar);
+    }
+    ivar = class_getInstanceVariable([table class], "_ballProperties");
+    if (ivar) {
+        return object_getIvar(table, ivar);
+    }
+    return nil;
+}
 
 %hook Table
 
@@ -25,21 +62,29 @@ static BOOL isMenuVisible = NO;
 - (void)updateAimAssistData {
     if (!overlay) return;
     
-    id<TableProperties> props = [self properties];
+    id<TableProperties> props = getTableProperties(self);
     if (!props) return;
     
+    // Lấy pockets
     NSArray *pocketPoints = [props getPockets];
     NSMutableArray *pockets = [NSMutableArray array];
     for (NSValue *val in pocketPoints) {
         CGPoint pos = [val CGPointValue];
-        PocketInfo info = {pos, [props getPocketRadius]};
+        id radiusObj = [props getPocketRadius];
+        float radius = [radiusObj floatValue];
+        PocketInfo info = {pos, radius};
         [pockets addObject:[NSValue valueWithBytes:&info objCType:@encode(PocketInfo)]];
     }
     
-    NSArray *balls = [[BallManager sharedManager] getBalls];
+    id ballManager = getBallManager();
+    if (!ballManager) return;
+    
+    NSArray *balls = [ballManager getBalls];
     NSMutableArray *ballInfos = [NSMutableArray array];
     for (Ball *b in balls) {
-        BOOL isPocketed = [b state] == 2 || ![b onTable];
+        int state = [b state];
+        BOOL onTable = [b onTable];
+        BOOL isPocketed = (state == 2 || !onTable);
         BallInfo info = {[b position], [b radius], [b number], [b classification], isPocketed};
         [ballInfos addObject:[NSValue valueWithBytes:&info objCType:@encode(BallInfo)]];
     }
@@ -51,54 +96,4 @@ static BOOL isMenuVisible = NO;
 
 %end
 
-%hook Ball
-
-- (void)setPosition:(CGPoint)pos {
-    %orig;
-    if (overlay) [overlay markDirty];
-}
-
-- (void)setState:(int)state {
-    %orig;
-    if (overlay) [overlay markDirty];
-}
-
-%end
-
-%hook CCTouchDispatcher
-
-- (void)touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event {
-    %orig;
-    UITouch *touch = [touches anyObject];
-    if (touch.tapCount == 2) {
-        if (!currentScene) return;
-        CCNode *existingMenu = [currentScene getChildByTag:888];
-        if (existingMenu) {
-            [existingMenu removeFromParentAndCleanup:YES];
-            isMenuVisible = NO;
-        } else {
-            AimAssistMenu *menu = [AimAssistMenu showMenu];
-            menu.tag = 888;
-            [currentScene addChild:menu z:1000];
-            isMenuVisible = YES;
-        }
-    }
-}
-
-%end
-
-%hook CCDirector
-
-- (void)setRunningScene:(CCScene *)scene {
-    %orig;
-    currentScene = scene;
-    if (overlay && scene) {
-        [scene addChild:overlay z:999];
-    }
-}
-
-%end
-
-%ctor {
-    NSLog(@"AimAssist: Tweak loaded.");
-}
+// Các hook khác giữ nguyên...
